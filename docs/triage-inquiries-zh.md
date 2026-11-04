@@ -27,6 +27,8 @@ python3 tools/triage_inquiries.py examples/inquiries_sample.csv /tmp/inquiries_t
 
 - 缺少必填表头 `id,country,product,quantity,timeline_days` 时，向标准错误输出中文提示并以非零状态退出，不创建也不覆盖输出文件。
 - 空字段、非正整数、字段数不足只影响当前行（判为 B），不会中断整批；短行会按空值补齐。
+- 行字段数多于表头时，输出只保留表头声明的列，并在 `reason` 中说明被截断的多余字段；原本可判 A 的目标询盘改判 B，后续行照常处理。
+- 数量/交期超过 1000 位的异常数字按无效字段判 B，不会因整数转换失败中断整批。
 - 输入不是有效 UTF-8 时同样报错退出，不产生输出文件。
 
 ## 示例

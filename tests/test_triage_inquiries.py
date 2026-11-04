@@ -135,6 +135,21 @@ class ClassifyInquiryTests(unittest.TestCase):
         self.assertIn("quantity", reason)
         self.assertIn("timeline_days", reason)
 
+    def test_oversized_numeric_values_are_invalid_with_short_reason(self) -> None:
+        huge = "9" * 5000
+        for quantity, timeline, field in (
+            (huge, "30", "quantity"),
+            ("4", huge, "timeline_days"),
+        ):
+            with self.subTest(field=field):
+                priority, reason = triage_inquiries.classify_inquiry(
+                    "Kazakhstan", "lowbed", quantity, timeline
+                )
+                self.assertEqual(priority, "B")
+                self.assertIn(field, reason)
+                self.assertNotIn(huge, reason)
+                self.assertLess(len(reason), 200)
+
     def test_c_non_target_country(self) -> None:
         priority, reason = triage_inquiries.classify_inquiry(
             "Germany", "lowbed", "10", "7"
@@ -311,6 +326,82 @@ class CommandLineTests(unittest.TestCase):
         self.assertEqual(row[5], "B")
         self.assertIn("quantity", row[6])
         self.assertIn("timeline_days", row[6])
+
+    def test_over_wide_row_is_b_truncated_and_batch_continues(self) -> None:
+        source = self.tmp / "in.csv"
+        target = self.tmp / "out.csv"
+        source.write_text(
+            "id,country,product,quantity,timeline_days\n"
+            "INQ-70,Kazakhstan,lowbed,3,30,unexpected\n"
+            "INQ-71,Uzbekistan,flatbed,4,20\n",
+            encoding="utf-8",
+        )
+
+        result = run_cli(source, target)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        output = read_csv(target)
+        self.assertEqual(output[0], HEADER + ["priority", "reason"])
+        self.assertEqual(len(output), 3)
+
+        malformed = output[1]
+        self.assertEqual(len(malformed), 7)
+        self.assertEqual(
+            malformed[:5], ["INQ-70", "Kazakhstan", "lowbed", "3", "30"]
+        )
+        self.assertEqual(malformed[5], "B")
+        self.assertIn("多余字段", malformed[6])
+        self.assertIn("unexpected", malformed[6])
+
+        normal = output[2]
+        self.assertEqual(len(normal), 7)
+        self.assertEqual(normal[5], "A")
+
+    def test_over_wide_row_with_empty_extra_field_is_b(self) -> None:
+        source = self.tmp / "in.csv"
+        target = self.tmp / "out.csv"
+        source.write_text(
+            "id,country,product,quantity,timeline_days\n"
+            "INQ-72,Kazakhstan,lowbed,3,30,\n"
+            "INQ-73,Uzbekistan,flatbed,4,20\n",
+            encoding="utf-8",
+        )
+
+        result = run_cli(source, target)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        output = read_csv(target)
+
+        malformed = output[1]
+        self.assertEqual(len(malformed), 7)
+        self.assertEqual(malformed[5], "B")
+        self.assertIn("多余字段", malformed[6])
+        self.assertIn("（空）", malformed[6])
+        self.assertEqual(output[2][5], "A")
+
+    def test_oversized_quantity_does_not_abort_batch(self) -> None:
+        huge = "9" * 5000
+        rows = [
+            ["INQ-80", "Kazakhstan", "lowbed", huge, "30"],
+            ["INQ-81", "Uzbekistan", "flatbed", "4", "20"],
+        ]
+        source = self.tmp / "in.csv"
+        target = self.tmp / "out.csv"
+        write_csv(source, HEADER, rows)
+
+        result = run_cli(source, target)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        output = read_csv(target)
+        self.assertEqual(len(output), 3)
+
+        malformed = output[1]
+        self.assertEqual(len(malformed), 7)
+        self.assertEqual(malformed[3], huge)
+        self.assertEqual(malformed[5], "B")
+        self.assertIn("quantity", malformed[6])
+        self.assertNotIn(huge, malformed[6])
+        self.assertLess(len(malformed[6]), 200)
+
+        normal = output[2]
+        self.assertEqual(normal[5], "A")
 
     def test_header_only_input_succeeds(self) -> None:
         source = self.tmp / "in.csv"

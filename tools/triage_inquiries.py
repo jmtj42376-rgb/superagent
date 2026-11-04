@@ -47,6 +47,13 @@ TARGET_PRODUCTS = frozenset({"lowbed", "flatbed", "tipper"})
 MIN_QUANTITY = 3
 MAX_TIMELINE_DAYS = 30
 
+# 业务数量/交期不会达到这个位数；超过时按无效处理，避免异常长数字拖垮解析。
+MAX_INTEGER_DIGITS = 1000
+# 原因列只展示这么多字符，保证每行原因简短。
+_REASON_VALUE_LIMIT = 32
+# 多余字段最多展示前几个，避免原因列过长。
+_MAX_EXTRA_FIELDS_SHOWN = 3
+
 # ASCII 数字串，避免把 "+3"、"3.0"、"3_0"、Unicode 数字等当作正整数。
 _POSITIVE_INT_RE = re.compile(r"[0-9]+")
 _MISSING_HEADER_MESSAGE = (
@@ -66,8 +73,47 @@ def _positive_int(raw: str) -> int | None:
     text = raw.strip()
     if not _POSITIVE_INT_RE.fullmatch(text):
         return None
-    value = int(text)
+    if len(text) > MAX_INTEGER_DIGITS:
+        return None
+    try:
+        value = int(text)
+    except ValueError:
+        # 例如 Python 3.11+ 的 int 字符串转换上限被调低。
+        return None
     return value if value > 0 else None
+
+
+def _short_value(value: str) -> str:
+    """去掉首尾空白并截断，供 reason 展示。"""
+    text = value.strip()
+    if not text:
+        return "（空）"
+    if len(text) > _REASON_VALUE_LIMIT:
+        return f"{text[:_REASON_VALUE_LIMIT]}…（共 {len(text)} 字符）"
+    return text
+
+
+def _invalid_value(name: str, text: str) -> str:
+    """格式化一个无效数值字段，超长时只描述长度。"""
+    if len(text) > MAX_INTEGER_DIGITS:
+        return f"{name}（长度 {len(text)}，超出上限）"
+    return f"{name}={_short_value(text)}"
+
+
+def _extra_fields_reason(
+    actual_count: int,
+    expected_count: int,
+    extra_values: Sequence[str],
+) -> str:
+    """生成“行字段数多于表头”的原因，说明被截断的多余字段。"""
+    shown = [_short_value(value) for value in extra_values[:_MAX_EXTRA_FIELDS_SHOWN]]
+    extra_text = ", ".join(shown)
+    if len(extra_values) > _MAX_EXTRA_FIELDS_SHOWN:
+        extra_text += f" 等 {len(extra_values)} 个字段"
+    return (
+        f"输入行字段数多于表头（{actual_count} 列，期望 {expected_count} 列；"
+        f"多余字段：{extra_text}）"
+    )
 
 
 def classify_inquiry(
@@ -115,11 +161,11 @@ def classify_inquiry(
     if quantity_text:
         quantity_value = _positive_int(quantity_text)
         if quantity_value is None:
-            invalid.append(f"quantity={quantity_text}")
+            invalid.append(_invalid_value("quantity", quantity_text))
     if timeline_text:
         timeline_value = _positive_int(timeline_text)
         if timeline_value is None:
-            invalid.append(f"timeline_days={timeline_text}")
+            invalid.append(_invalid_value("timeline_days", timeline_text))
 
     if missing or invalid:
         parts: list[str] = []
@@ -180,18 +226,22 @@ def triage_rows(
     header: Sequence[str],
     rows: Iterable[Sequence[str]],
 ) -> list[list[str]]:
-    """为每行追加 priority/reason；短行补齐，保持原有列与行顺序。"""
+    """为每行追加 priority/reason；保持声明的列数和行顺序。"""
     indexes = {name: header.index(name) for name in REQUIRED_HEADERS}
     width = len(header)
     output: list[list[str]] = []
     for row in rows:
         cells = list(row)
-        if len(cells) < width:
-            cells.extend([""] * (width - len(cells)))
+        actual_count = len(cells)
+        extra_values = cells[width:]
+        if actual_count > width:
+            # 输出只保留表头声明的列，多余字段写进 reason。
+            cells = cells[:width]
+        elif actual_count < width:
+            cells.extend([""] * (width - actual_count))
 
         def cell(name: str) -> str:
-            index = indexes[name]
-            return cells[index] if index < len(cells) else ""
+            return cells[indexes[name]]
 
         priority, reason = classify_inquiry(
             cell("country"),
@@ -199,6 +249,17 @@ def triage_rows(
             cell("quantity"),
             cell("timeline_days"),
         )
+        if extra_values:
+            extra_reason = _extra_fields_reason(actual_count, width, extra_values)
+            if priority == "C":
+                reason = f"{reason}；{extra_reason}"
+            elif priority == "A":
+                # 目标询盘本身符合 A，但行结构异常，降为 B。
+                priority = "B"
+                reason = extra_reason
+            else:
+                reason = f"{extra_reason}；{reason}"
+
         output.append(cells + [priority, reason])
     return output
 
