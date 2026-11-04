@@ -1,0 +1,11 @@
+id,country,product,quantity,timeline_days,note
+INQ-1001,Kazakhstan,lowbed,3,30,数量与交期边界
+INQ-1002,Uzbekistan,flatbed,2,20,数量不足
+INQ-1003,Kazakhstan,lowbed,3,31,交期超过 30 天
+INQ-1004,Germany,lowbed,10,7,国家不在目标市场
+INQ-1005,Uzbekistan,tipper,,10,数量为空
+INQ-1006,  Kyrgyzstan ,FLATBED,5,14,首尾空格且大小写不同
+INQ-1007,Tajikistan,tipper,4,30,信息完整且达阈值
+INQ-1008,Turkmenistan,van,10,7,产品不在目标品类
+INQ-1009,Uzbekistan,lowbed,2,45,数量与交期均未达标
+INQ-1010,Kazakhstan,flatbed,0,10,数量不是正整数
